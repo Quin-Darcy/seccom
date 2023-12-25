@@ -3,6 +3,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use std::io::{Read, Write, Error};
+use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{Receiver, Sender};
 
@@ -10,7 +11,7 @@ use byteorder::{ByteOrder, BigEndian};
 
 
 pub struct Server1 {
-    pub listener: TcpListener,
+    listener: TcpListener,
 }
 
 
@@ -27,28 +28,35 @@ impl Server1 {
     pub fn run(&mut self) {
         println!("Listening for incoming connections...");
 
-        // Vector to hold stdin transmitters for all clients. Since a single stdin_rx cannot be cloned into
-        // each client thread, we will create an stdin channel for each client so each gets their own receiver
-        // We need to wrap this in an Arc and Mutex since it will be modified in different threads. Specifically,
-        // it is used in the stdin thread and it is populated in the match statement occurring in the main thread
-        let client_senders: Arc<Mutex<Vec<Sender<Vec<u8>>>>> = Arc::new(Mutex::new(Vec::new()));
+        // The client_map is a hashmap that manages the active client connections.
+        // It is keyed by the client's address (as a String) and contains a tuple
+        // consisting of:
+        // - An mpsc::Sender<String> for the main-to-client channel, allowing the main
+        //   thread to send specific messages to individual clients.
+        // - A TcpStream, representing the connection to that specific client.
+        // The client_map is wrapped in an Arc and Mutex to allow safe concurrent
+        // access from multiple threads, ensuring that updates to the client connections
+        // are coordinated across the main and client-handling threads.
+        let client_map: Arc<Mutex<HashMap<String, (mpsc::Sender<Vec<u8>>, TcpStream)>>> = Arc::new(Mutex::new(HashMap::new()));
+
 
         // Thread for reading from stdin and sending those bytes to all clients
-        let client_senders_clone = Arc::clone(&client_senders);
+        let client_map_clone = Arc::clone(&client_map);
         thread::spawn(move || {
             loop {
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).unwrap();
-                let message_bytes = input.as_bytes().to_vec();
+                let mut temp_bytes = input.as_bytes().to_vec();
 
-                // Encryption to happen here later on
+                // Encrypt temp_bytes here later on
 
-                let message = String::from_utf8_lossy(&message_bytes);
-                println!("[Server]: {}", message);
+                // Like the client, the server appends the total length of the message to the beginning
+                let mut message_bytes = (4_u32 + temp_bytes.len() as u32).to_be_bytes().to_vec();
+                message_bytes.append(&mut temp_bytes);
 
                 // Send bytes to all client threads
-                let senders = client_senders_clone.lock().unwrap();
-                for client_tx in senders.iter() {
+                let clients = client_map_clone.lock().unwrap();
+                for (_, (client_tx, _)) in clients.iter() {
                     client_tx.send(message_bytes.clone()).unwrap();
                 }
             }
@@ -59,25 +67,30 @@ impl Server1 {
             match stream {
                 Ok(stream) => {
                     let address = stream.peer_addr().unwrap().to_string();
-                    let address_clone1 = address.clone();
-                    let address_clone2 = address.clone();
 
-                    println!("{} - Connected", address);
+                    println!("{} - Connected\n\n", address);
 
                     // Create a new sender for this client which will be used in the stdin thread
                     let (client_stdin_tx, client_stdin_rx) = mpsc::channel::<Vec<u8>>();
-                    let mut senders = client_senders.lock().unwrap();
-                    senders.push(client_stdin_tx);
 
                     // Create channel for communicating from client thread to main thread
                     let (client_tx, client_rx) = mpsc::channel::<Vec<u8>>();
+
+                    // Create reference to the shared client_map 
+                    let client_map_clone = Arc::clone(&client_map);
+
+                    // Add new entry to the hashmap including the sender for the command channel and the client's TcpStream
+                    client_map_clone.lock().unwrap().insert(address.clone(), (client_stdin_tx, stream.try_clone().unwrap()));
 
                     // Client handling thread
                     thread::spawn(move || {
                         if let Err(e) = Self::handle_client(stream, client_stdin_rx, client_tx) {
                             eprintln!("Error handling client: {:?}", e);
                         }
-                        println!("{} - Disconnected", address_clone1);
+
+                        // Remove the client from the map upon disconnection
+                        client_map_clone.lock().unwrap().remove(&address);
+                        println!("{} - Disconnected", address);
                     });
 
                     // Creating a "Main" thread for each client. Creating the thread here inside 
@@ -88,7 +101,7 @@ impl Server1 {
                             // Decrypt response bytes here later on
 
                             let message = String::from_utf8_lossy(&response_bytes);
-                            println!("[{}]: {}", address_clone2, message);
+                            println!("{}", message);
                         }
                     });
                 }
@@ -130,20 +143,22 @@ impl Server1 {
                 Ok(0) => break, // Connection closed by client
                 Ok(bytes_read) => {
                     // Read the length prefix if it's not already set and we have enough bytes
-                    if expected_length.is_none() && total_received + bytes_read >= 4 {
+                    if expected_length.is_none() && bytes_read >= 4 {
                         // This branch is taken at the beginning of a new message
+
+                        // read_u32 will only read in the first 4 bytes
                         expected_length = Some(BigEndian::read_u32(&buffer) as usize);
                         dynamic_buffer.extend_from_slice(&buffer[4..bytes_read]);
                     } else {
                         // Otherwise, keep adding the message segments to the buffer
-                        dynamic_buffer.extend_from_slice(&buffer);
+                        dynamic_buffer.extend_from_slice(&buffer[..bytes_read]);
                     }
 
                     total_received += bytes_read;
 
                     // Check if the entire message has been received
                     if let Some(length) = expected_length {
-                        if total_received >= length + 4 {
+                        if total_received >= length {
                             // Send the complete message (excluding length prefix) to the main thread
                             client_tx.send(dynamic_buffer.clone()).unwrap();
                             dynamic_buffer.clear();
