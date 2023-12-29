@@ -8,32 +8,77 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use byteorder::{ByteOrder, BigEndian};
 
+use aes_crypt;
 
-pub struct Client1 {}
 
-impl Client1 {
-    pub fn new() -> Self {
-        Self {}
+/* AES_CRYPT API
+
+pub fn gen_key() -> [u8; 4 * Nk as usize] {
+    rand::thread_rng().gen::<[u8; 4 * Nk as usize]>()
+}
+
+pub fn encrypt(plain_text: &[u8], key: &[u8]) -> Vec<u8> {
+    let key_schedule: Vec<u32> = key_expansion(key);
+    let mut data: Data = Data::from_plain_text_bytes(plain_text);
+
+    for i in 0..data.states.len() {
+        cipher(&mut data.states[i], &key_schedule);
     }
 
-    pub fn run(&self, socket: &str) {
-        let stream = TcpStream::connect(socket).expect("Could not connect to server");
+    data.to_encrypted_bytes()
+}
+
+pub fn decrypt(cipher_text: &[u8], key: &[u8]) -> Vec<u8> {
+    let key_schedule: Vec<u32> = key_expansion(key);
+    let mut data: Data = Data::from_cipher_text_bytes(cipher_text);
+
+    for i in 0..data.states.len() {
+        inv_cipher(&mut data.states[i], &key_schedule);
+    }
+
+    data.to_decrypted_bytes()
+}
+
+*/
+
+
+pub struct Client2 {
+    key: Vec<u8>,
+}
+
+impl Client2 {
+    pub fn new() -> Self {
+        Self { key: Vec::new() }
+    }
+
+    pub fn run(&mut self, socket: &str) {
+        let mut stream = TcpStream::connect(socket).expect("Could not connect to server");
+
+        // Generate cryptographic key
+        self.key = aes_crypt::gen_key().to_vec();
+
+        // Send the key to the server as the first message
+        let key_length = self.key.len() as u32;
+        let mut key_message = key_length.to_be_bytes().to_vec();
+        key_message.extend(&self.key);
+        stream.write_all(&key_message).expect("Failed to send key");
 
         // Channel for reading from stdin and sending to server
         let (stdin_tx, stdin_rx) = mpsc::channel::<Vec<u8>>();
 
         // Thread for reading from stdin
         let stdin_tx_clone = stdin_tx.clone();
+        let key_clone = self.key.clone();
         thread::spawn(move || {
             loop {
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).unwrap();
-                let mut temp_bytes = input.as_bytes().to_vec();
+                let temp_bytes = input.as_bytes().to_vec();
 
                 // Encrypt temp_bytes here later on
-
-                let mut message_bytes = (4_u32 + temp_bytes.len() as u32).to_be_bytes().to_vec();
-                message_bytes.append(&mut temp_bytes);
+                let mut encrypted_bytes = aes_crypt::encrypt(&temp_bytes, &key_clone);
+                let mut message_bytes = (4_u32 + encrypted_bytes.len() as u32).to_be_bytes().to_vec();
+                message_bytes.append(&mut encrypted_bytes);
 
                 // Send message_bytes through the stdin channel
                 stdin_tx_clone.send(message_bytes.clone()).unwrap();
@@ -55,8 +100,8 @@ impl Client1 {
         loop {
             if let Ok(response_bytes) = server_rx.try_recv() {
                 // Decrypt response bytes here later on
-
-                let message = String::from_utf8_lossy(&response_bytes);
+                let decrypted_bytes = aes_crypt::decrypt(&response_bytes, &self.key);
+                let message = String::from_utf8_lossy(&decrypted_bytes);
                 println!("{}", message);
             }
         }

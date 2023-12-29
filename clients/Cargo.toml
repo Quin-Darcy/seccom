@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 byteorder = "1.5.0"
+aes_crypt = { path = "/home/arbegla/projects/rust/tests/aes_crypt" }

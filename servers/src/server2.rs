@@ -9,21 +9,24 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use byteorder::{ByteOrder, BigEndian};
 
+use aes_crypt;
 
-pub struct Server1 {
+
+pub struct Server2 {
     listener: TcpListener,
-    message_count: usize,
+    client_keys: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
 
-impl Server1 {
+impl Server2 {
     pub fn new(port: usize) -> Self {
         let address = format!("0.0.0.0:{}", port);
         let listener = TcpListener::bind(address).expect("Could not bind");
+        let client_keys = Arc::new(Mutex::new(HashMap::new()));
 
         Self {
             listener,
-            message_count: 0,
+            client_keys,
         }
     }
 
@@ -44,22 +47,27 @@ impl Server1 {
 
         // Thread for reading from stdin and sending those bytes to all clients
         let client_map_clone = Arc::clone(&client_map);
+        let client_keys_clone = Arc::clone(&self.client_keys); 
         thread::spawn(move || {
             loop {
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input).unwrap();
-                let mut temp_bytes = input.as_bytes().to_vec();
+                let temp_bytes = input.as_bytes().to_vec();
 
-                // Encrypt temp_bytes here later on
-
-                // Like the client, the server appends the total length of the message to the beginning
-                let mut message_bytes = (4_u32 + temp_bytes.len() as u32).to_be_bytes().to_vec();
-                message_bytes.append(&mut temp_bytes);
-
-                // Send bytes to all client threads
                 let clients = client_map_clone.lock().unwrap();
-                for (_, (client_tx, _)) in clients.iter() {
-                    client_tx.send(message_bytes.clone()).unwrap();
+                let client_keys = client_keys_clone.lock().unwrap();
+
+                for (address, (client_tx, _)) in clients.iter() {
+                    if let Some(key) = client_keys.get(address) {
+                        // Encrypt the message using the client's key
+                        let encrypted_bytes = aes_crypt::encrypt(&temp_bytes, key);
+                        let message_length = encrypted_bytes.len() as u32;
+                        let mut message_bytes = message_length.to_be_bytes().to_vec();
+                        message_bytes.extend(encrypted_bytes);
+        
+                        // Send the encrypted message to the client
+                        client_tx.send(message_bytes).unwrap();
+                    }
                 }
             }
         });
@@ -69,6 +77,7 @@ impl Server1 {
             match stream {
                 Ok(stream) => {
                     let address = stream.peer_addr().unwrap().to_string();
+                    let address_clone = address.clone();
 
                     println!("{} - Connected\n\n", address);
 
@@ -85,25 +94,31 @@ impl Server1 {
                     client_map_clone.lock().unwrap().insert(address.clone(), (client_stdin_tx, stream.try_clone().unwrap()));
 
                     // Client handling thread
+                    let client_keys_clone = self.client_keys.clone();
                     thread::spawn(move || {
-                        if let Err(e) = Self::handle_client(stream, client_stdin_rx, client_tx) {
+                        if let Err(e) = Self::handle_client(stream, client_stdin_rx, client_tx, address.clone(), client_keys_clone.clone()) {
                             eprintln!("Error handling client: {:?}", e);
                         }
 
-                        // Remove the client from the map upon disconnection
+                        // Remove the client from the map upon disconnection as well as their key
                         client_map_clone.lock().unwrap().remove(&address);
+                        client_keys_clone.lock().unwrap().remove(&address);
                         println!("{} - Disconnected", address);
                     });
 
                     // Creating a "Main" thread for each client. Creating the thread here inside 
                     // the match statement allows each client to get its own dedicated comms thread
+                    let client_keys_clone = self.client_keys.clone();
                     thread::spawn(move || {
                         // Attempt to receive any messages sent from the client 
                         while let Ok(response_bytes) = client_rx.recv() {
                             // Decrypt response bytes here later on
 
-                            let message = String::from_utf8_lossy(&response_bytes);
-                            println!("{}", message);
+                            if let Some(key) = client_keys_clone.lock().unwrap().get(&address_clone) {
+                                let decrypted_bytes = aes_crypt::decrypt(&response_bytes, key);
+                                let message = String::from_utf8_lossy(&decrypted_bytes);
+                                println!("{}", message);
+                            }
                         }
                     });
                 }
@@ -112,7 +127,14 @@ impl Server1 {
         }
     }
 
-    fn handle_client(mut stream: TcpStream, stdin_rx: Receiver<Vec<u8>>, client_tx: Sender<Vec<u8>>) -> Result<(), Error> {
+    fn handle_client(
+        mut stream: TcpStream, 
+        stdin_rx: Receiver<Vec<u8>>, 
+        client_tx: Sender<Vec<u8>>, 
+        address: String, 
+        client_keys: Arc<Mutex<HashMap<String, Vec<u8>>>>
+    ) -> Result<(), Error> {
+
         // To store entire messages sent from the client
         let mut dynamic_buffer = Vec::new();
 
@@ -121,6 +143,9 @@ impl Server1 {
 
         // To keep track of how many bytes out of the expected lenth have been received
         let mut total_received = 0;
+
+        // To see if key is being sent 
+        let mut first_message = true;
 
         loop {
             // Non-blocking attempt to receive message from stdin and send to client
@@ -162,10 +187,15 @@ impl Server1 {
                     if let Some(length) = expected_length {
                         if total_received >= length {
                             // If this is the first message, it is the client sending us the encryption key
-                            
+                            if first_message {
+                                // Store the key
+                                client_keys.lock().unwrap().insert(address.clone(), dynamic_buffer.clone());
+                                first_message = false;
+                            } else {
+                                // Send the complete message (excluding length prefix) to the main thread
+                                client_tx.send(dynamic_buffer.clone()).unwrap();
+                            }
 
-                            // Send the complete message (excluding length prefix) to the main thread
-                            client_tx.send(dynamic_buffer.clone()).unwrap();
                             dynamic_buffer.clear();
                             expected_length = None;
                             total_received = 0;
