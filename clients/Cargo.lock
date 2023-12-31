@@ -5,6 +5,7 @@ version = 3
 [[package]]
 name = "aes_crypt"
 version = "0.1.0"
+source = "git+https://github.com/Quin-Darcy/aes_crypt.git?branch=COMMS#3908290e97df841216626e2d79a1ada3f33f3149"
 dependencies = [
  "rand",
 ]
