@@ -5,7 +5,7 @@ mod client1;
 mod client2;
 mod client3;
 
-//use crate::client1::Client1;
+use crate::client1::Client1;
 use crate::client2::Client2;
 use crate::client3::Client3;
 
