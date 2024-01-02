@@ -19,7 +19,10 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "bernie_hmac"
 version = "0.1.0"
-source = "git+https://github.com/Quin-Darcy/bernie_hmac.git#98bbded3462e2f93c47695c0a0be9063bedbc87d"
+source = "git+https://github.com/Quin-Darcy/bernie_hmac.git#c19e855e259b1ec152f391ed635bba69d1b1ffaf"
+dependencies = [
+ "subtle",
+]
 
 [[package]]
 name = "bitvec"
@@ -161,6 +164,12 @@ dependencies = [
  "byteorder",
  "dh",
 ]
+
+[[package]]
+name = "subtle"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81cdd64d312baedb58e21336b31bc043b77e01cc99033ce76ef539f78e965ebc"
 
 [[package]]
 name = "tap"

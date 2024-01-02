@@ -13,21 +13,25 @@ use aes_crypt;
 use dh;
 use bernie_hmac;
 
+const MAC_TAG_SIZE: usize = 32;
 
-pub struct Server3 {
+pub struct Server4 {
     listener: TcpListener,
+    client_map: Arc<Mutex<HashMap<String, (mpsc::Sender<Vec<u8>>, TcpStream)>>>,
     client_keys: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
 
-impl Server3 {
+impl Server4 {
     pub fn new(port: usize) -> Self {
         let address = format!("0.0.0.0:{}", port);
         let listener = TcpListener::bind(address).expect("Could not bind");
+        let client_map = Arc::new(Mutex::new(HashMap::new()));
         let client_keys = Arc::new(Mutex::new(HashMap::new()));
 
         Self {
             listener,
+            client_map,
             client_keys,
         }
     }
@@ -43,12 +47,11 @@ impl Server3 {
         // - A TcpStream, representing the connection to that specific client.
         // The client_map is wrapped in an Arc and Mutex to allow safe concurrent
         // access from multiple threads, ensuring that updates to the client connections
-        // are coordinated across the main and client-handling threads.
-        let client_map: Arc<Mutex<HashMap<String, (mpsc::Sender<Vec<u8>>, TcpStream)>>> = Arc::new(Mutex::new(HashMap::new()));
+        // are coordinated across the main and client-handling threads
 
 
         // Thread for reading from stdin and sending those bytes to all clients
-        let client_map_clone = Arc::clone(&client_map);
+        let client_map_clone = Arc::clone(&self.client_map);
         let client_keys_clone = Arc::clone(&self.client_keys); 
         thread::spawn(move || {
             loop {
@@ -64,9 +67,17 @@ impl Server3 {
                         // Encrypt the message using the client's key
                         let mut encrypted_bytes = aes_crypt::encrypt(&temp_bytes, key);
 
+                        // Compute the MAC tag
+                        let mut mac_tag = bernie_hmac::hmac(&encrypted_bytes, key);
+
                         // Construct message with length header
-                        let mut message_bytes = (4_u32 + encrypted_bytes.len() as u32).to_be_bytes().to_vec();
+                        let mut message_bytes = (4_u32 + encrypted_bytes.len() as u32 + mac_tag.len() as u32).to_be_bytes().to_vec();
+
+                        // Append encrypted bytes to message
                         message_bytes.append(&mut encrypted_bytes);
+
+                        // Append MAC tag to message
+                        message_bytes.append(&mut mac_tag);
 
                         // Send message_bytes through the stdin channel
                         client_tx.send(message_bytes).unwrap();
@@ -102,7 +113,7 @@ impl Server3 {
                     let (client_tx, client_rx) = mpsc::channel::<Vec<u8>>();
 
                     // Create reference to the shared client_map 
-                    let client_map_clone = Arc::clone(&client_map);
+                    let client_map_clone = Arc::clone(&self.client_map);
 
                     // Add new entry to the hashmap including the sender for the command channel and the client's TcpStream
                     client_map_clone.lock().unwrap().insert(address.clone(), (client_stdin_tx, stream.try_clone().unwrap()));
@@ -147,7 +158,7 @@ impl Server3 {
         address: String, 
         client_keys: Arc<Mutex<HashMap<String, Vec<u8>>>>,
         key_pair: (Vec<u8>, Vec<u8>)
-    ) -> Result<(), Error> {
+    ) -> Result<(), std::io::Error> {
 
         // To store entire messages sent from the client
         let mut dynamic_buffer = Vec::new();
@@ -223,8 +234,23 @@ impl Server3 {
 
                                 first_message = false;
                             } else {
-                                // Send the complete message (excluding length prefix) to the main thread
-                                client_tx.send(dynamic_buffer.clone()).unwrap();
+                                // Separate the message from the MAC tag
+                                let (payload, received_mac_tag) = dynamic_buffer.split_at(dynamic_buffer.len() - MAC_TAG_SIZE);
+
+                                // Retrieve shared key to verify MAC tag
+                                let keys_lock = client_keys.lock().unwrap();
+                                if let Some(key) = keys_lock.get(&address.clone()) {
+                                    // Verify the MAC tag
+                                    if !bernie_hmac::verify_hmac(&payload, &received_mac_tag, &key) {
+                                        println!("[-] MAC verification failed!");
+                                        return Err(std::io::Error::new(std::io::ErrorKind::Other, "MAC verification failed"));
+                                    } else {
+                                        // Send the complete message (excluding length prefix and MAC tag) to the main thread
+                                        println!("\n\n[+] MAC tag verification successful.");
+                                        println!("--------------------------------------\n");
+                                        client_tx.send(payload.clone().to_vec()).unwrap();
+                                    }
+                                } 
                             }
 
                             dynamic_buffer.clear();
