@@ -11,7 +11,7 @@ use byteorder::{ByteOrder, BigEndian};
 
 use aes_crypt;
 use dh;
-use shasher;
+use bernie_hmac;
 
 
 pub struct Server3 {
@@ -212,7 +212,7 @@ impl Server3 {
 
                                 // Use SHA-256 as the KDF to compute the final key
                                 println!("[+] Using SHA-256 as KDF to compute final key ...");
-                                let final_key = shasher::get_hash(&shared_secret);
+                                let final_key = bernie_hmac::hash(&shared_secret);
 
                                 // Add the key to the client_keys HashMap
                                 client_keys.lock().unwrap().insert(address.clone(), final_key);

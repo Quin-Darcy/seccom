@@ -17,6 +17,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
+name = "bernie_hmac"
+version = "0.1.0"
+source = "git+https://github.com/Quin-Darcy/bernie_hmac.git#98bbded3462e2f93c47695c0a0be9063bedbc87d"
+
+[[package]]
 name = "bitvec"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -152,17 +157,9 @@ name = "servers"
 version = "0.1.0"
 dependencies = [
  "aes_crypt",
+ "bernie_hmac",
  "byteorder",
  "dh",
- "shasher",
-]
-
-[[package]]
-name = "shasher"
-version = "0.1.0"
-source = "git+https://github.com/Quin-Darcy/shasher.git?branch=KDF#25da4ecfa13a70fcfcae792423b44971aa52c09a"
-dependencies = [
- "num-bigint",
 ]
 
 [[package]]

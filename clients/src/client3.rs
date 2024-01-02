@@ -11,7 +11,7 @@ use byteorder::{ByteOrder, BigEndian};
 
 use aes_crypt;
 use dh;
-use shasher;
+use bernie_hmac;
 
 
 pub struct Client3 {
@@ -158,7 +158,7 @@ impl Client3 {
 
                                 // Use SHA-256 as the KDF to compute the final key
                                 println!("[+] Using SHA-256 as KDF to compute final key ...");
-                                let final_key = shasher::get_hash(&shared_secret);
+                                let final_key = bernie_hmac::hash(&shared_secret);
 
                                 // Set the key member equal to the final key
                                 let mut unlocked_key = key.lock().unwrap();

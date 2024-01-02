@@ -9,4 +9,4 @@ edition = "2021"
 byteorder = "1.5.0"
 aes_crypt = { git = "https://github.com/Quin-Darcy/aes_crypt.git", branch = "COMMS" }
 dh = { git = "https://github.com/Quin-Darcy/dh.git" }
-shasher = { git = "https://github.com/Quin-Darcy/shasher.git", branch = "KDF" }
+bernie_hmac = { git = "https://github.com/Quin-Darcy/bernie_hmac.git" }
