@@ -5,11 +5,13 @@ mod client1;
 mod client2;
 mod client3;
 mod client4;
+mod client5;
 
 use crate::client1::Client1;
 use crate::client2::Client2;
 use crate::client3::Client3;
 use crate::client4::Client4;
+use crate::client5::Client5;
 
 
 fn main() {
@@ -25,7 +27,11 @@ fn main() {
     // let mut c3 = Client3::new();
     // c3.run(socket3);
 
-    let socket4 = "127.0.0.1:9999";
-    let mut c4 = Client4::new();
-    c4.run(socket4);
+    // let socket4 = "127.0.0.1:9999";
+    // let mut c4 = Client4::new();
+    // c4.run(socket4);
+
+    let socket5 = "127.0.0.1:9898";
+    let mut c5 = Client5::new();
+    c5.run(socket5);
 }

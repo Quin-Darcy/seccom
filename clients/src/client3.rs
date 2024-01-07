@@ -53,7 +53,7 @@ impl Client3 {
                 let key_guard = key_clone.lock().unwrap();
 
                 // Encrypt the message
-                let mut encrypted_bytes = aes_crypt::encrypt(&temp_bytes, &key_guard);
+                let mut encrypted_bytes = aes_crypt::encrypt_ecb(&temp_bytes, &key_guard);
 
                 // Construct header prefix and append encrypted bytes to it
                 let mut message_bytes = (4_u32 + encrypted_bytes.len() as u32).to_be_bytes().to_vec();
@@ -82,7 +82,7 @@ impl Client3 {
                 // Decrypt response bytes and display
                 let key_guard = self.key.lock().unwrap(); // Lock and access the key
                 if !key_guard.is_empty() {
-                    let decrypted_bytes = aes_crypt::decrypt(&response_bytes, &key_guard);
+                    let decrypted_bytes = aes_crypt::decrypt_ecb(&response_bytes, &key_guard);
                     let message = String::from_utf8_lossy(&decrypted_bytes); // Use decrypted bytes
                     println!("{}", message);
                 }

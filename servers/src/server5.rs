@@ -8,24 +8,31 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{Receiver, Sender};
 
 use byteorder::{ByteOrder, BigEndian};
+use rand::{Rng, thread_rng};
 
 use aes_crypt;
+use dh;
 
+const MAC_TAG_SIZE: usize = 16; // 16 bytes or 128 bits
+const IV_SIZE: usize = 12; // 12 bytes or 96 bits
 
-pub struct Server2 {
+pub struct Server5 {
     listener: TcpListener,
+    client_map: Arc<Mutex<HashMap<String, (mpsc::Sender<Vec<u8>>, TcpStream)>>>,
     client_keys: Arc<Mutex<HashMap<String, Vec<u8>>>>,
 }
 
 
-impl Server2 {
+impl Server5 {
     pub fn new(port: usize) -> Self {
         let address = format!("0.0.0.0:{}", port);
         let listener = TcpListener::bind(address).expect("Could not bind");
+        let client_map = Arc::new(Mutex::new(HashMap::new()));
         let client_keys = Arc::new(Mutex::new(HashMap::new()));
 
         Self {
             listener,
+            client_map,
             client_keys,
         }
     }
@@ -41,12 +48,11 @@ impl Server2 {
         // - A TcpStream, representing the connection to that specific client.
         // The client_map is wrapped in an Arc and Mutex to allow safe concurrent
         // access from multiple threads, ensuring that updates to the client connections
-        // are coordinated across the main and client-handling threads.
-        let client_map: Arc<Mutex<HashMap<String, (mpsc::Sender<Vec<u8>>, TcpStream)>>> = Arc::new(Mutex::new(HashMap::new()));
+        // are coordinated across the main and client-handling threads
 
 
         // Thread for reading from stdin and sending those bytes to all clients
-        let client_map_clone = Arc::clone(&client_map);
+        let client_map_clone = Arc::clone(&self.client_map);
         let client_keys_clone = Arc::clone(&self.client_keys); 
         thread::spawn(move || {
             loop {
@@ -59,13 +65,32 @@ impl Server2 {
 
                 for (address, (client_tx, _)) in clients.iter() {
                     if let Some(key) = client_keys.get(address) {
-                        // Encrypt the message using the client's key
-                        let encrypted_bytes = aes_crypt::encrypt_ecb(&temp_bytes, key);
-                        let message_length = encrypted_bytes.len() as u32;
-                        let mut message_bytes = message_length.to_be_bytes().to_vec();
-                        message_bytes.extend(encrypted_bytes);
-        
-                        // Send the encrypted message to the client
+                        // Generate a new IV for each message
+                        println!("\n--------------------------------------");
+                        println!("[+] Generating unique IV ...");
+                        let mut iv = generate_iv();
+
+                        // Initialize the additional authenticated data (if any)
+                        let aad: Vec<u8> = Vec::new();
+
+                        // Encrypt the message and retreive the ciphertext and authentication tag
+                        println!("[+] Encrypting {} bytes with AES-256-GCM ...", temp_bytes.len());
+                        println!("--------------------------------------");
+                        let (mut encrypted_bytes, mut auth_tag) = aes_crypt::encrypt_gcm(&temp_bytes, &iv, &aad, key, MAC_TAG_SIZE * 8);
+
+                        // Construct message with length header
+                        let mut message_bytes = (4_u32 + encrypted_bytes.len() as u32 + auth_tag.len() as u32 + IV_SIZE as u32).to_be_bytes().to_vec();
+
+                        // Append encrypted bytes to message
+                        message_bytes.append(&mut encrypted_bytes);
+
+                        // Append authentication tag to message
+                        message_bytes.append(&mut auth_tag);
+
+                        // Append the IV to the the message
+                        message_bytes.append(&mut iv);
+
+                        // Send message_bytes through the stdin channel
                         client_tx.send(message_bytes).unwrap();
                     }
                 }
@@ -75,11 +100,21 @@ impl Server2 {
         // Continuously listen for new connections
         for stream in self.listener.incoming() {
             match stream {
-                Ok(stream) => {
+                Ok(mut stream) => {
                     let address = stream.peer_addr().unwrap().to_string();
-                    let address_clone = address.clone();
 
-                    println!("{} - Connected\n\n", address);
+                    println!("{} - Connected\n", address);
+
+                    // Generate key pair for this client and send client public key
+                    println!("--------------------------------------");
+                    println!("[+] Generating key pair ...");
+                    let key_pair = dh::gen_key_pair();
+
+                    println!("[+] Sending public key to client ...");
+                    let key_length = key_pair.1.len() as u32;
+                    let mut key_message = key_length.to_be_bytes().to_vec();
+                    key_message.extend(key_pair.1.clone());
+                    stream.write_all(&key_message).expect("Failed to send client public key");
 
                     // Create a new sender for this client which will be used in the stdin thread
                     let (client_stdin_tx, client_stdin_rx) = mpsc::channel::<Vec<u8>>();
@@ -88,7 +123,7 @@ impl Server2 {
                     let (client_tx, client_rx) = mpsc::channel::<Vec<u8>>();
 
                     // Create reference to the shared client_map 
-                    let client_map_clone = Arc::clone(&client_map);
+                    let client_map_clone = Arc::clone(&self.client_map);
 
                     // Add new entry to the hashmap including the sender for the command channel and the client's TcpStream
                     client_map_clone.lock().unwrap().insert(address.clone(), (client_stdin_tx, stream.try_clone().unwrap()));
@@ -96,7 +131,7 @@ impl Server2 {
                     // Client handling thread
                     let client_keys_clone = self.client_keys.clone();
                     thread::spawn(move || {
-                        if let Err(e) = Self::handle_client(stream, client_stdin_rx, client_tx, address.clone(), client_keys_clone.clone()) {
+                        if let Err(e) = Self::handle_client(stream, client_stdin_rx, client_tx, address.clone(), client_keys_clone.clone(), key_pair) {
                             eprintln!("Error handling client: {:?}", e);
                         }
 
@@ -108,17 +143,12 @@ impl Server2 {
 
                     // Creating a "Main" thread for each client. Creating the thread here inside 
                     // the match statement allows each client to get its own dedicated comms thread
-                    let client_keys_clone = self.client_keys.clone();
                     thread::spawn(move || {
                         // Attempt to receive any messages sent from the client 
                         while let Ok(response_bytes) = client_rx.recv() {
-                            // Decrypt response bytes here later on
-
-                            if let Some(key) = client_keys_clone.lock().unwrap().get(&address_clone) {
-                                let decrypted_bytes = aes_crypt::decrypt_ecb(&response_bytes, key);
-                                let message = String::from_utf8_lossy(&decrypted_bytes);
-                                println!("{}", message);
-                            }
+                            // Response bytes will already have been decrypted in handle_client
+                            let message = String::from_utf8_lossy(&response_bytes);
+                            println!("Client > {}", message);
                         }
                     });
                 }
@@ -132,8 +162,9 @@ impl Server2 {
         stdin_rx: Receiver<Vec<u8>>, 
         client_tx: Sender<Vec<u8>>, 
         address: String, 
-        client_keys: Arc<Mutex<HashMap<String, Vec<u8>>>>
-    ) -> Result<(), Error> {
+        client_keys: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+        key_pair: (Vec<u8>, Vec<u8>)
+    ) -> Result<(), std::io::Error> {
 
         // To store entire messages sent from the client
         let mut dynamic_buffer = Vec::new();
@@ -171,16 +202,18 @@ impl Server2 {
                 Ok(bytes_read) => {
                     // Read the length prefix if it's not already set and we have enough bytes
                     if expected_length.is_none() && bytes_read >= 4 {
-                        // This branch is taken at the beginning of a new message
-
                         // read_u32 will only read in the first 4 bytes
                         expected_length = Some(BigEndian::read_u32(&buffer) as usize);
-                        dynamic_buffer.extend_from_slice(&buffer[4..bytes_read]);
+
+                        // Ensure only the part of the buffer after the length prefix is added
+                        if bytes_read > 4 {
+                            dynamic_buffer.extend_from_slice(&buffer[4..bytes_read]);
+                        }
                     } else {
-                        // Otherwise, keep adding the message segments to the buffer
+                        // For subsequent segments, add the entire buffer content
                         dynamic_buffer.extend_from_slice(&buffer[..bytes_read]);
                     }
-
+                    
                     total_received += bytes_read;
 
                     // Check if the entire message has been received
@@ -188,12 +221,52 @@ impl Server2 {
                         if total_received >= length {
                             // If this is the first message, it is the client sending us the encryption key
                             if first_message {
-                                // Store the key
-                                client_keys.lock().unwrap().insert(address.clone(), dynamic_buffer.clone());
+                                println!("[*] Received client's public key");
+
+                                // Use the client's public key to compute the shared secret
+                                println!("[+] Calculating shared secret ...");
+                                let modulus = dh::get_domain_params().0;
+                                let shared_secret = dh::get_secret(&dynamic_buffer.clone(), &key_pair.0, &modulus);
+
+                                // Use SHA-256 as the KDF to compute the final key
+                                println!("[+] Using SHA-256 as KDF to compute final key ...");
+                                let final_key = bernie_hmac::hash(&shared_secret);
+
+                                // Add the key to the client_keys HashMap
+                                client_keys.lock().unwrap().insert(address.clone(), final_key);
+
+                                println!("[*] DH Key Exchange Successful.");
+                                println!("--------------------------------------\n");
+
                                 first_message = false;
                             } else {
-                                // Send the complete message (excluding length prefix) to the main thread
-                                client_tx.send(dynamic_buffer.clone()).unwrap();
+                                // Separate the message from the MAC tag and IV
+                                println!("--------------------------------------");
+                                println!("[+] {} bytes received.", total_received);
+                                let (payload_with_tag, iv) = dynamic_buffer.split_at(dynamic_buffer.len() - IV_SIZE);
+                                let (payload, auth_tag) = payload_with_tag.split_at(payload_with_tag.len() - MAC_TAG_SIZE);
+
+                                // Retrieve shared key
+                                let keys_lock = client_keys.lock().unwrap();
+                                if let Some(key) = keys_lock.get(&address.clone()) {
+                                    println!("[+] Decrypting {} bytes with AES-256-GCM ...", payload.len());
+
+                                    // Decrypt and verify the payload - Using empty AAD for now - Need to update later
+                                    let temp_aad: Vec<u8> = Vec::new();
+                                    let (message, result) = aes_crypt::decrypt_gcm(payload, iv, &temp_aad, auth_tag, &key);
+
+                                    // Check result 
+                                    if result {
+                                        // Send the complete message (excluding length prefix, MAC tag, and IV) to the main thread
+                                        println!("[*] AES-GCM authentication and decryption successful.");
+                                        println!("--------------------------------------\n");
+                                        client_tx.send(message.clone().to_vec()).unwrap(); 
+                                    } else {
+                                        println!("[!] AES-GCM authentication failed: Data integrity cannot be verified.");
+                                        println!("--------------------------------------\n");
+                                        return Err(std::io::Error::new(std::io::ErrorKind::Other, "MAC verification failed"));
+                                    }
+                                } 
                             }
 
                             dynamic_buffer.clear();
@@ -208,5 +281,12 @@ impl Server2 {
         }
         Ok(())
     }
+}
+
+fn generate_iv() -> Vec<u8> {
+    let mut rng = thread_rng();
+    let mut iv = vec![0u8; IV_SIZE];
+    rng.fill(iv.as_mut_slice());
+    iv
 }
 

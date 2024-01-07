@@ -62,7 +62,7 @@ impl Server3 {
                 for (address, (client_tx, _)) in clients.iter() {
                     if let Some(key) = client_keys.get(address) {
                         // Encrypt the message using the client's key
-                        let mut encrypted_bytes = aes_crypt::encrypt(&temp_bytes, key);
+                        let mut encrypted_bytes = aes_crypt::encrypt_ecb(&temp_bytes, key);
 
                         // Construct message with length header
                         let mut message_bytes = (4_u32 + encrypted_bytes.len() as u32).to_be_bytes().to_vec();
@@ -128,7 +128,7 @@ impl Server3 {
                         while let Ok(response_bytes) = client_rx.recv() {
                             // This branch is taken after client sends it public key
                             if let Some(key) = client_keys_clone.lock().unwrap().get(&address_clone) {
-                                let decrypted_bytes = aes_crypt::decrypt(&response_bytes, key);
+                                let decrypted_bytes = aes_crypt::decrypt_ecb(&response_bytes, key);
                                 let message = String::from_utf8_lossy(&decrypted_bytes);
                                 println!("{}", message);
                             }

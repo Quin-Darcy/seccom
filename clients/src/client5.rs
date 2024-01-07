@@ -8,18 +8,19 @@ use std::io::{Read, Write, Error};
 use std::sync::mpsc::{Receiver, Sender};
 
 use byteorder::{ByteOrder, BigEndian};
+use rand::{Rng, thread_rng};
 
 use aes_crypt;
 use dh;
-use bernie_hmac;
 
-const MAC_TAG_SIZE: usize = 32;
+const MAC_TAG_SIZE: usize = 16; // 16 bytes or 128 bits
+const IV_SIZE: usize = 12; // 12 bytes or 96 bits
 
-pub struct Client4 {
+pub struct Client5 {
     key: Arc<Mutex<Vec<u8>>>,
 }
 
-impl Client4 {
+impl Client5 {
     pub fn new() -> Self {
         Self { key: Arc::new(Mutex::new(Vec::new())) }
     }
@@ -53,20 +54,30 @@ impl Client4 {
                 // Lock and access the key
                 let key_guard = key_clone.lock().unwrap();
 
-                // Encrypt the message
-                let mut encrypted_bytes = aes_crypt::encrypt_ecb(&temp_bytes, &key_guard);
+                // Generate a new IV for each message
+                println!("\n--------------------------------------");
+                println!("[+] Generating unique IV ...");
+                let mut iv = generate_iv();
 
-                // Compute the MAC tag
-                let mut mac_tag = bernie_hmac::hmac(&encrypted_bytes, &key_guard);
+                // Initialize the additional authenticated data (if any)
+                let aad: Vec<u8> = Vec::new();
+
+                // Encrypt the message and retrieve the ciphertext and authentication tag
+                println!("[+] Encrypting {} bytes with AES-256-GCM ...", temp_bytes.len());
+                println!("--------------------------------------");
+                let (mut encrypted_bytes, mut auth_tag) = aes_crypt::encrypt_gcm(&temp_bytes, &iv, &aad, &key_guard, MAC_TAG_SIZE * 8);
 
                 // Construct message with length header
-                let mut message_bytes = (4_u32 + encrypted_bytes.len() as u32 + mac_tag.len() as u32).to_be_bytes().to_vec();
+                let mut message_bytes = (4_u32 + encrypted_bytes.len() as u32 + auth_tag.len() as u32 + IV_SIZE as u32).to_be_bytes().to_vec();
 
                 // Append encrypted bytes to the message
                 message_bytes.append(&mut encrypted_bytes);
 
-                // Append the MAC tag to the message
-                message_bytes.append(&mut mac_tag);
+                // Append the authentication tag to the message
+                message_bytes.append(&mut auth_tag);
+
+                // Append the IV to the message
+                message_bytes.append(&mut iv);
 
                 // Send message_bytes through the stdin channel
                 stdin_tx_clone.send(message_bytes.clone()).unwrap();
@@ -88,13 +99,9 @@ impl Client4 {
         // Main loop to keep the client running and process server responses
         loop {
             if let Ok(response_bytes) = server_rx.try_recv() {
-                // Decrypt response bytes and display
-                let key_guard = self.key.lock().unwrap(); // Lock and access the key
-                if !key_guard.is_empty() {
-                    let decrypted_bytes = aes_crypt::decrypt_ecb(&response_bytes, &key_guard);
-                    let message = String::from_utf8_lossy(&decrypted_bytes); // Use decrypted bytes
-                    println!("Server > {}", message);
-                }
+                // response_bytes has already been decrypted in handle_client
+                let message = String::from_utf8_lossy(&response_bytes); // Use decrypted bytes
+                println!("Server > {}", message);
             }
         }
         
@@ -185,21 +192,31 @@ impl Client4 {
 
                                 first_message = false;
                             } else {
-                                // Separate the message from the MAC tag
-                                let (payload, received_mac_tag) = dynamic_buffer.split_at(dynamic_buffer.len() - MAC_TAG_SIZE);
+                                // Separate the message from the MAC tag and IV
+                                println!("--------------------------------------");
+                                println!("[+] {} bytes received.", total_received);
+                                let (payload_with_tag, iv) = dynamic_buffer.split_at(dynamic_buffer.len() - IV_SIZE);
+                                let (payload, auth_tag) = payload_with_tag.split_at(payload_with_tag.len() - MAC_TAG_SIZE);
 
-                                // Retrieve shared key to verify MAC tag
+                                // Retrieve shared key 
                                 let key_lock = key.lock().unwrap();
 
-                                // Verify the MAC tag
-                                if !bernie_hmac::verify_hmac(&payload, &received_mac_tag, &key_lock) {
-                                    println!("MAC verification failed!");
-                                    return Err(std::io::Error::new(std::io::ErrorKind::Other, "MAC verification failed"));
-                                } else {
-                                    // Send the complete message (excluding length prefix and MAC tag) to the main thread
-                                    println!("\n[+] MAC tag verification successful.");
+                                println!("[+] Decrypting {} bytes with AES-256-GCM ...", payload.len());
+
+                                // Decrypt and verify - Using empty AAD for now - Need to update later
+                                let temp_aad: Vec<u8> = Vec::new();
+                                let (message, result) = aes_crypt::decrypt_gcm(payload, iv, &temp_aad, auth_tag, &key_lock);
+
+                                // Check result
+                                if result {
+                                    // Send the complete message (excluding length prefix, MAC tag, and IV) to the main thread
+                                    println!("[+] AES-GCM authentication and decryption successful.");
                                     println!("--------------------------------------\n");
-                                    server_tx.send(payload.clone().to_vec()).unwrap();
+                                    server_tx.send(message.clone().to_vec()).unwrap();    
+                                } else {
+                                    println!("[!] AES-GCM authentication failed: Data integrity cannot be verified.");
+                                    println!("--------------------------------------\n");
+                                    return Err(std::io::Error::new(std::io::ErrorKind::Other, "MAC verification failed"));          
                                 }
                             }
 
@@ -215,4 +232,11 @@ impl Client4 {
         }
         Ok(())
     }
+}
+
+fn generate_iv() -> Vec<u8> {
+    let mut rng = thread_rng();
+    let mut iv = vec![0u8; IV_SIZE];
+    rng.fill(iv.as_mut_slice());
+    iv
 }

@@ -65,7 +65,7 @@ impl Server4 {
                 for (address, (client_tx, _)) in clients.iter() {
                     if let Some(key) = client_keys.get(address) {
                         // Encrypt the message using the client's key
-                        let mut encrypted_bytes = aes_crypt::encrypt(&temp_bytes, key);
+                        let mut encrypted_bytes = aes_crypt::encrypt_ecb(&temp_bytes, key);
 
                         // Compute the MAC tag
                         let mut mac_tag = bernie_hmac::hmac(&encrypted_bytes, key);
@@ -139,9 +139,9 @@ impl Server4 {
                         while let Ok(response_bytes) = client_rx.recv() {
                             // This branch is taken after client sends it public key
                             if let Some(key) = client_keys_clone.lock().unwrap().get(&address_clone) {
-                                let decrypted_bytes = aes_crypt::decrypt(&response_bytes, key);
+                                let decrypted_bytes = aes_crypt::decrypt_ecb(&response_bytes, key);
                                 let message = String::from_utf8_lossy(&decrypted_bytes);
-                                println!("{}", message);
+                                println!("Client > {}", message);
                             }
                         }
                     });

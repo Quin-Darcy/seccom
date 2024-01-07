@@ -45,7 +45,7 @@ impl Client2 {
                 let temp_bytes = input.as_bytes().to_vec();
 
                 // Encrypt temp_bytes here later on
-                let mut encrypted_bytes = aes_crypt::encrypt(&temp_bytes, &key_clone);
+                let mut encrypted_bytes = aes_crypt::encrypt_ecb(&temp_bytes, &key_clone);
                 let mut message_bytes = (4_u32 + encrypted_bytes.len() as u32).to_be_bytes().to_vec();
                 message_bytes.append(&mut encrypted_bytes);
 
@@ -69,7 +69,7 @@ impl Client2 {
         loop {
             if let Ok(response_bytes) = server_rx.try_recv() {
                 // Decrypt response bytes here later on
-                let decrypted_bytes = aes_crypt::decrypt(&response_bytes, &self.key);
+                let decrypted_bytes = aes_crypt::decrypt_ecb(&response_bytes, &self.key);
                 let message = String::from_utf8_lossy(&decrypted_bytes);
                 println!("{}", message);
             }
