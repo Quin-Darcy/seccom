@@ -24,49 +24,33 @@
   
   * Availability is typically achieved through redundancy, failover mechanisms, load balancing, data backup and recovery, monitoring and alers. 
 
-
-
 ### Notes on AES-GCM
 
-The operations of GCM depend on the choice of underlying symmetric key block cipher and thus can be considered a mode of operation of the block cipher. This means that the GCM key is the block cipher key. 
+The operations of GCM depend on the choice of underlying symmetric key block cipher and thus can be considered a mode of operation of the block cipher. This means that the GCM key is the block cipher key. It uses universal hashing over a binary Galois Field to provide authenticated encryption. 
+
+
+
+"CGM is capable of acting as a stand-alone MAC, authenticating messages when there is no data to encrypt, with no modifications. Importantly, it can be used as an incremental MAC: if an authentication tag is computed for a message, then part of the message is changed, an authentication tag can be computed for the new message with computational cost proportional to the number of bits that were changed."
+
+
 
 The block size of the underlying block cipher shall be 128 bits and the key size shall be at least 128 bits. 
 
-##### Input Data
+##### Input Data for Authenticated Encryption
 
-Given the selection of an approved block cipher and key, there are three input strings to the authenticated encryption function:
+Given the selection of an approved block cipher and key, there four inputs to the authenticated encryption function:
 
+* A secret key K, whose length is appropriate for the underlying block cipher
 
+* a plaintext, denoted P, which can have any number of bits between 0 and 2.pow(39) - 256
 
-* a plaintext, denoted P;
+* additional authenticated data (AAD), which is denoted as A. This data is authenticated, but not encrypted, and can have any number of bits between 0 and 2.pow(64)
 
-* additional authenticated data (AAD); and
-
-* an initialization vector (IV), denoted IV.
-
-
+* an initialization vector (IV), that can have any number of bits between 1 and 2.pow(64). For a fixed value of the key, each IV value must be distinct, but need not have equal lengths. 96-bit IV values can be processed efficiently so that length is recommended for situations in which efficiency is critical.
 
 The plaintext and the AAD are the two categories of data that GCM protects. GCM protects the authenticity of the plaintext and the AAD; GCM also protects the confidentiality of the plaintext, while the AAD is left in the clear. 
 
-
-
 The IV is essentially a nonce, i.e, a value that is unique within the specified context, which determines an invocation of the authenticated encryption function on the input data to be protected. 
-
-
-
-The bit lengths of the input strings to the authenticated encryption function shall meet the following requirements: 
-
-
-
-* len(P) <= 2.pow(39) - 256;
-
-* len(A) <= 2.pow(64) - 1;
-
-* 1 <= len(IV) <= 2.pow(64) - 1;
-
-
-
-The AAD and IV shall be multiples of 8.
 
 
 
@@ -74,14 +58,8 @@ The AAD and IV shall be multiples of 8.
 
 The following two bit strings comprise the output data of the authenticated encryption function:
 
-
-
 * A ciphertext, denoted C, whose bit length is the same as that of the plaintext.
 
 * An authentication tag, or tag, for short, denoted T.
 
-
-
 The bit length of T may be any of the following five values: 128, 120, 112, 104, or 96.
-
-
